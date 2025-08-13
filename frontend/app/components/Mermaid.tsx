@@ -69,7 +69,7 @@ function classifyKind(graph: string): 'flow' | 'compare' | 'process' | 'warning'
 	return 'flow';
 }
 
-const MERMAID_START = /^(\s*)(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|journey|pie|mindmap|timeline|gitGraph)\b/i;
+const MERMAID_START = /^(\s*)(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|journey|pie|mindmap|timeline|gitGraph|C4Context|C4Container|C4Component|C4)\b/i;
 
 function isMermaidSource(text: string): boolean {
 	return MERMAID_START.test(text.trim());
@@ -89,6 +89,7 @@ function extractFromObject(obj: any): string | null {
 	const candidateKeys = [
 		'flowchart', 'graph', 'sequenceDiagram', 'classDiagram', 'stateDiagram', 'stateDiagram-v2',
 		'erDiagram', 'gantt', 'journey', 'pie', 'mindmap', 'timeline', 'gitGraph',
+		'C4Context', 'C4Container', 'C4Component', 'C4',
 		'diagram', 'mermaid', 'code', 'content'
 	];
 	for (const key of candidateKeys) {
@@ -234,7 +235,10 @@ export default function Mermaid({ code }: { code: string }) {
 	const id = useId().replace(/[:]/g, '');
 	useEffect(() => {
 		if (!code) { setSvg(''); setRaw(''); setDbg(''); return; }
-		(async () => {
+
+		let isMounted = true;
+
+		const renderDiagram = async () => {
 			let g = '';
 			const isDebug = (() => {
 				try {
@@ -246,18 +250,32 @@ export default function Mermaid({ code }: { code: string }) {
 			const logs: string[] = [];
 			try {
 				const { graph } = extractGraph(code);
-				if (!graph) { setSvg(''); setRaw(''); return; }
+				if (!graph) { if (isMounted) { setSvg(''); setRaw(''); } return; }
 				logs.push('extracted: ' + graph);
-				g = normalizeLabels(graph); logs.push('normalizeLabels: ' + g);
-				g = collapseFunctionLikeLabels(g); logs.push('collapseFunctionLikeLabels: ' + g);
+
+				g = graph;
+				const diagramTypeMatch = g.trim().match(MERMAID_START);
+				const diagramType = diagramTypeMatch ? diagramTypeMatch[2].toLowerCase() : '';
+				const isFlowchart = diagramType === 'flowchart' || diagramType === 'graph';
+				logs.push(`diagramType: ${diagramType}, isFlowchart: ${isFlowchart}`);
+
 				g = removeDuplicateHeader(g); logs.push('removeDuplicateHeader: ' + g);
-				g = convertBareLinkLabels(g); logs.push('convertBareLinkLabels: ' + g);
-				g = convertParensWithInnerParensToBrackets(g); logs.push('convertParensWithInnerParensToBrackets: ' + g);
+
+				if (isFlowchart) {
+					logs.push('Applying flowchart-specific sanitizers');
+					g = normalizeLabels(g); logs.push('normalizeLabels: ' + g);
+					g = collapseFunctionLikeLabels(g); logs.push('collapseFunctionLikeLabels: ' + g);
+					g = convertBareLinkLabels(g); logs.push('convertBareLinkLabels: ' + g);
+					g = convertParensWithInnerParensToBrackets(g); logs.push('convertParensWithInnerParensToBrackets: ' + g);
+					g = tightenIdShapeSpacing(g); logs.push('tightenIdShapeSpacing: ' + g);
+					g = ensureNodeIds(g); logs.push('ensureNodeIds: ' + g);
+					g = fixBrokenFunctionLabelsInBrackets(g); logs.push('fixBrokenFunctionLabelsInBrackets: ' + g);
+					g = fixNodeIdDirectlyFollowedByNode(g); logs.push('fixNodeIdDirectlyFollowedByNode: ' + g);
+				}
+
+				// This one is safe for all diagram types
 				g = cleanQuotesInsideShapes(g); logs.push('cleanQuotesInsideShapes: ' + g);
-				g = tightenIdShapeSpacing(g); logs.push('tightenIdShapeSpacing: ' + g);
-				g = ensureNodeIds(g); logs.push('ensureNodeIds: ' + g);
-				g = fixBrokenFunctionLabelsInBrackets(g); logs.push('fixBrokenFunctionLabelsInBrackets: ' + g);
-				g = fixNodeIdDirectlyFollowedByNode(g); logs.push('fixNodeIdDirectlyFollowedByNode: ' + g);
+				
 				const kind = classifyKind(g);
 				const init = getMermaidInit(kind);
 				mermaid.initialize(init as any);
@@ -269,7 +287,7 @@ export default function Mermaid({ code }: { code: string }) {
 				let out = '';
 				for (const variant of attempts) {
 					try {
-						if (isDebug) { try { mermaid.parse(variant); logs.push('parse ok'); } catch (e: any) { logs.push('parse error: ' + (e?.message || String(e))); }
+						if (isDebug) { try { await mermaid.parse(variant); logs.push('parse ok'); } catch (e: any) { logs.push('parse error: ' + (e?.message || String(e))); }
 						}
 						out = await renderMermaid(`m${id}`, variant); logs.push('render ok'); break;
 					} catch (e: any) {
@@ -277,16 +295,32 @@ export default function Mermaid({ code }: { code: string }) {
 					}
 				}
 				out = makeResponsiveSvg(out);
-				setSvg(out);
-				setRaw(out ? '' : g);
+				if (isMounted) {
+					setSvg(out);
+					setRaw(out ? '' : g);
+				}
 			} catch (e: any) {
 				logs.push('fatal: ' + (e?.message || String(e)));
-				setSvg(''); setRaw(g || code);
+				if (isMounted) {
+					setSvg(''); setRaw(g || code);
+				}
 			} finally {
-				if (isDebug) { const text = logs.join('\n'); setDbg(text); try { console.debug('[Mermaid debug]', text); } catch {} }
+				if (isMounted && isDebug) { const text = logs.join('\n'); setDbg(text); try { console.debug('[Mermaid debug]', text); } catch {} }
 			}
-		})();
+		};
+
+		// Delay rendering to allow slide transitions to complete
+		const timer = setTimeout(() => {
+			renderDiagram();
+		}, 100);
+
+
+		return () => {
+			isMounted = false;
+			clearTimeout(timer);
+		};
 	}, [code, id]);
+
 	if (!code) return null;
 	if (svg) return <div style={{ width: '100%', overflowX: 'auto', overflowY: 'hidden' }} dangerouslySetInnerHTML={{ __html: svg }} />;
 	if (raw) return (

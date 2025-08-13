@@ -4,9 +4,6 @@ Local dev
 
 ```bash
 cd /home/maskeen/br1/KnowDeck/frontend
-# optional Clerk: store publishable key in localStorage so the inline script can load
-# open browser console and run:
-# localStorage.setItem('CLERK_PUBLISHABLE_KEY', 'pk_test_...')
 python3 -m http.server 5500 --bind 127.0.0.1
 ```
 

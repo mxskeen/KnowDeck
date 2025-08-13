@@ -48,10 +48,11 @@ export default function Page() {
 
 	const ask = async (q: string) => {
 		if (!deck || !q) return;
-		const r = await fetch(`${API}/api/decks/${deck.id}/slides`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q }) });
+		const payload = { question: q, slide_index: index + 1 };
+		const r = await fetch(`${API}/api/decks/${deck.id}/slides`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 		if (r.status === 429) return alert('Daily limit reached. Sign in for more uses.');
 		const d = await r.json();
-		setDeck(d); setIndex(d.slides.length - 1);
+		setDeck(d); setIndex(Math.min(index + 1, d.slides.length - 1));
 		getUsage().then(setUsage).catch(() => {});
 	};
 
@@ -130,7 +131,10 @@ export default function Page() {
 
 					<Group>
 						<TextInput placeholder="Ask a question to add a new slide…" onKeyDown={(e) => { if (e.key === 'Enter') ask((e.target as HTMLInputElement).value); }} w={520} radius="md" />
-						<Button radius="md" onClick={() => { const el = document.querySelector<HTMLInputElement>('input[placeholder^="Ask a question"]'); if (el) ask(el.value); }}>Add</Button>
+						<Button radius="md" onClick={() => {
+							const el = document.querySelector<HTMLInputElement>('input[placeholder^="Ask a question"]');
+							if (el) ask(el.value);
+						}}>Add</Button>
 					</Group>
 				</Stack>
 			)}

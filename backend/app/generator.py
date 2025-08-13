@@ -68,7 +68,6 @@ def _pick_code(value: Any) -> Optional[CodeBlock]:
         content = value.get("content")
         if isinstance(content, (str, list, dict)):
             return CodeBlock(language=value.get("language"), content=_to_str(content))
-        # if model put code under 'code'
         if isinstance(value.get("code"), (str, list, dict)):
             return CodeBlock(language=value.get("language"), content=_to_str(value.get("code")))
         return CodeBlock(language=value.get("language"), content=_to_str(value))
@@ -92,12 +91,39 @@ def generate_deck(topic: str, level: str = "beginner") -> Deck:
     return Deck(topic=topic, level=level, slides=slides)
 
 
-def append_slide(deck: Deck, question: str, slide_index: Optional[int] = None) -> Deck:
+def append_slide(deck: Deck, question: str, slide_index: Optional[int] = None, replace: bool = False) -> Deck:
     q = question.strip().rstrip("?.!")
-    title = f"Q: {q}"
-    detail = _answer_stub(deck.topic, q)
-    slide = Slide(title=title, body=detail)
-    deck.slides.append(slide)
+    # Determine context: the slide above the insertion point, or the slide being replaced
+    ctx: Optional[Slide] = None
+    if slide_index is not None:
+        if replace:
+            if 0 <= slide_index < len(deck.slides):
+                ctx = deck.slides[slide_index]
+        else:
+            if 0 <= slide_index - 1 < len(deck.slides):
+                ctx = deck.slides[slide_index - 1]
+    else:
+        if len(deck.slides) > 0:
+            ctx = deck.slides[-1]
+
+    # Ask ZnapAI for a concise answer with optional code/diagram using context
+    try:
+        data = _qa_with_znapai(deck.topic, q, ctx)
+        title = _to_str(data.get("title", f"Q: {q}"))
+        body = _to_str(data.get("body", _answer_stub(deck.topic, q)))
+        diagram = _pick_diagram(data.get("diagram"))
+        code_block = _pick_code(data.get("code"))
+        new_slide = Slide(title=title, body=body, diagram=diagram, code=code_block)
+    except Exception:
+        new_slide = Slide(title=f"Q: {q}", body=_answer_stub(deck.topic, q))
+
+    if slide_index is None or slide_index < 0 or slide_index > len(deck.slides):
+        deck.slides.append(new_slide)
+    else:
+        if replace and slide_index < len(deck.slides):
+            deck.slides[slide_index] = new_slide
+        else:
+            deck.slides.insert(slide_index, new_slide)
     return deck
 
 
@@ -142,6 +168,50 @@ def _generate_with_znapai(topic: str, level: str) -> List[Dict[str, Any]]:
         while len(slides) < 14:
             slides.append({"title": "Recap", "body": f"Key points about {topic}.", "image": None, "diagram": None, "code": None})
     return slides
+
+
+def _qa_with_znapai(topic: str, q: str, ctx: Optional[Slide]) -> Dict[str, Any]:
+    ctx_text = ""
+    if ctx is not None:
+        ctx_text = (
+            f"Context slide title: {ctx.title}\n"
+            f"Context slide body: {ctx.body}\n"
+        )
+        if ctx.code and ctx.code.content:
+            ctx_text += f"Context code (language={ctx.code.language or 'n/a'}):\n{ctx.code.content[:800]}\n"
+        if ctx.diagram:
+            ctx_text += f"Context diagram (mermaid):\n{ctx.diagram[:800]}\n"
+    prompt = (
+        "Answer the user's follow-up question for the current deck. Return ONLY JSON object: "
+        "{title, body, diagram|null, code|null}. body MUST be a plain string. Include code or diagram only if it helps. "
+        f"Deck topic: {topic}. Question: {q}. {ctx_text}"
+        "Write a new slide that complements the context without repeating it."
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.znapai_api_key}",
+    }
+    body = {
+        "model": settings.znapai_model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+    }
+    resp = _session.post(
+        "https://api.znapai.com/v1/chat/completions",
+        headers=headers,
+        data=json.dumps(body),
+        timeout=(10, 60),
+    )
+    resp.raise_for_status()
+    out = resp.json()
+    content = out.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    data = _parse_json_content(content)
+    if isinstance(data, dict):
+        return data
+    raise ValueError("Invalid QA JSON")
 
 
 def _parse_json_content(content: str) -> Any:

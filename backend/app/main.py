@@ -34,9 +34,10 @@ class NewDeckRequest(BaseModel):
 class AskRequest(BaseModel):
     question: str
     slide_index: Optional[int] = None
+    replace: Optional[bool] = False
 
 
-@app.get("/healthz")
+@app.get("/health")
 def healthz():
     return {"status": "ok"}
 
@@ -80,7 +81,7 @@ def ask(deck_id: str, payload: AskRequest, request: Request, x_user_id: Optional
     deck = store.get_deck(deck_id)
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
-    updated = append_slide(deck, payload.question, payload.slide_index)
+    updated = append_slide(deck, payload.question, payload.slide_index, bool(payload.replace))
     store.save_deck(updated)
     store.increment_use(key)
     return updated 

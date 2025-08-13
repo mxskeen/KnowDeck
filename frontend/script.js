@@ -65,10 +65,13 @@ $('#ask').onclick = async ()=>{
 	$('#ask').disabled = true;
 	try{
 		const headers = Object.assign({'Content-Type':'application/json'}, await authHeader());
-		const res = await fetch(`${API}/api/decks/${deck.id}/slides`, { method:'POST', headers, body:JSON.stringify({question:q}) });
+		// insert at current index+1 by default
+		const payload = { question:q, slide_index: index+1, replace: false };
+		const res = await fetch(`${API}/api/decks/${deck.id}/slides`, { method:'POST', headers, body:JSON.stringify(payload) });
 		if(res.status===429){ alert('Daily limit reached. Sign in for more uses.'); return; }
 		deck = await res.json();
-		index = deck.slides.length-1; render();
+		index = Math.min(payload.slide_index, deck.slides.length-1);
+		render();
 		refreshUsage();
 	} finally { $('#ask').disabled = false; $('#question').value=''; }
 }

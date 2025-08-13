@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KnowDeck</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script async src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>KnowDeck</h1>
+      <div class="topic-bar">
+        <input id="topic" placeholder="Ask anything to learn…" />
+        <select id="level">
+          <option value="beginner" selected>Beginner</option>
+          <option value="intermediate">Intermediate</option>
+          <option value="advanced">Advanced</option>
+        </select>
+        <button id="generate">Generate</button>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span id="usage" style="opacity:.7;font-size:12px;">uses: –/–</span>
+        <button id="copylink">Copy link</button>
+        <button id="signin">Sign in</button>
+        <button id="signout">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="deck" class="deck hidden">
+        <div class="slides">
+          <button id="prev" class="nav">←</button>
+          <div id="slide" class="slide">
+            <h2></h2>
+            <p></p>
+            <img id="slide-image" alt="" />
+          </div>
+          <button id="next" class="nav">→</button>
+        </div>
+        <div id="dots" class="dots"></div>
+        <div class="qa">
+          <input id="question" placeholder="Ask a question to add a new slide…" />
+          <button id="ask">Add</button>
+        </div>
+      </div>
+      <div id="empty" class="empty">Type a topic above to generate a deck.</div>
+    </main>
+  </div>
+  <script src="./script.js"></script>
+  <script>
+    window.addEventListener('load', async () => {
+      if(!window.Clerk) return;
+      const pk = window.localStorage.getItem('CLERK_PUBLISHABLE_KEY') || '';
+      if(!pk) return;
+      await window.Clerk.load({ publishableKey: pk });
+      document.getElementById('signin').onclick = ()=> window.Clerk.openSignIn();
+      document.getElementById('signout').onclick = ()=> window.Clerk.signOut();
+    });
+  </script>
+</body>
+</html> 

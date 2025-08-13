@@ -4,7 +4,7 @@ import os
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .types import Deck, Slide, CodeBlock
+from .types import Deck, Slide, CodeBlock, TableBlock
 from .config import settings
 
 
@@ -46,10 +46,43 @@ def _pick_diagram(value: Any) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, str):
+        # If value is a JSON-stringified object, try to decode and rebuild
+        t = value.strip()
+        if (t.startswith("{") and t.endswith("}")) or (t.startswith("[") and t.endswith("]")):
+            try:
+                obj = json.loads(t)
+                rebuilt = _pick_diagram(obj)
+                if rebuilt:
+                    return rebuilt
+            except Exception:
+                pass
         return value
     if isinstance(value, list):
         return "\n".join(_to_str(v) for v in value)
     if isinstance(value, dict):
+        # Single-key objects like {"flowchart TD": "A-->B"}
+        if len(value) == 1:
+            k = next(iter(value.keys()))
+            v = value[k]
+            if isinstance(v, (str, list, dict)):
+                key_l = str(k).strip()
+                prefix = key_l.split()[0].lower()
+                if prefix in {
+                    "flowchart", "graph", "sequencediagram", "classdiagram",
+                    "statediagram", "statediagram-v2", "erdiagram", "gantt",
+                    "journey", "pie", "mindmap", "timeline", "gitgraph",
+                }:
+                    return f"{k}\n{_to_str(v)}"
+        # Prefer explicit Mermaid keys if present
+        mermaid_keys = (
+            "flowchart", "graph", "sequenceDiagram", "classDiagram",
+            "stateDiagram", "stateDiagram-v2", "erDiagram", "gantt",
+            "journey", "pie", "mindmap", "timeline", "gitGraph",
+        )
+        for k in mermaid_keys:
+            if k in value and isinstance(value[k], (str, list, dict)):
+                body = _to_str(value[k])
+                return f"{k}\n{body}" if not body.strip().lower().startswith(("graph", "flowchart", "sequencediagram", "classdiagram", "statediagram")) else body
         for k in ("diagram", "mermaid", "code", "content", "graph"):
             if k in value and isinstance(value[k], (str, list, dict)):
                 return _to_str(value[k])
@@ -74,6 +107,18 @@ def _pick_code(value: Any) -> Optional[CodeBlock]:
     return CodeBlock(language=None, content=_to_str(value))
 
 
+def _pick_table(value: Any) -> Optional[TableBlock]:
+    if not value or not isinstance(value, dict):
+        return None
+    headers = value.get("headers")
+    rows = value.get("rows")
+    if isinstance(headers, list) and isinstance(rows, list):
+        headers = [ _to_str(h) for h in headers ]
+        rows = [ [ _to_str(c) for c in r ] for r in rows ]
+        return TableBlock(headers=headers, rows=rows)
+    return None
+
+
 def generate_deck(topic: str, level: str = "beginner") -> Deck:
     topic = topic.strip().rstrip("?.!")
     if not settings.znapai_api_key:
@@ -81,19 +126,18 @@ def generate_deck(topic: str, level: str = "beginner") -> Deck:
     data = _generate_with_znapai(topic, level)
     slides: List[Slide] = []
     for raw in data:
-        # normalize unpredictable shapes
         title = _to_str(raw.get("title", ""))
         body = _to_str(raw.get("body", ""))
         diagram = _pick_diagram(raw.get("diagram"))
         code_block = _pick_code(raw.get("code"))
+        table_block = _pick_table(raw.get("table"))
         image = raw.get("image") if isinstance(raw.get("image"), str) else None
-        slides.append(Slide(title=title, body=body, image=image, diagram=diagram, code=code_block))
+        slides.append(Slide(title=title, body=body, image=image, diagram=diagram, code=code_block, table=table_block))
     return Deck(topic=topic, level=level, slides=slides)
 
 
 def append_slide(deck: Deck, question: str, slide_index: Optional[int] = None, replace: bool = False) -> Deck:
     q = question.strip().rstrip("?.!")
-    # Determine context: the slide above the insertion point, or the slide being replaced
     ctx: Optional[Slide] = None
     if slide_index is not None:
         if replace:
@@ -106,14 +150,14 @@ def append_slide(deck: Deck, question: str, slide_index: Optional[int] = None, r
         if len(deck.slides) > 0:
             ctx = deck.slides[-1]
 
-    # Ask ZnapAI for a concise answer with optional code/diagram using context
     try:
         data = _qa_with_znapai(deck.topic, q, ctx)
         title = _to_str(data.get("title", f"Q: {q}"))
         body = _to_str(data.get("body", _answer_stub(deck.topic, q)))
         diagram = _pick_diagram(data.get("diagram"))
         code_block = _pick_code(data.get("code"))
-        new_slide = Slide(title=title, body=body, diagram=diagram, code=code_block)
+        table_block = _pick_table(data.get("table"))
+        new_slide = Slide(title=title, body=body, diagram=diagram, code=code_block, table=table_block)
     except Exception:
         new_slide = Slide(title=f"Q: {q}", body=_answer_stub(deck.topic, q))
 
@@ -131,11 +175,12 @@ def _generate_with_znapai(topic: str, level: str) -> List[Dict[str, Any]]:
     prompt = (
         "You are an expert teacher. Return ONLY JSON. "
         "Create 14-15 slides that teach the topic progressively: intro, key concepts table, how-it-works flow, examples, insertion/lookup/deletion, collision strategies, complexity, pros/cons, common pitfalls, use cases, recap. "
-        "Each slide object: {title, body, image|null, diagram|null, code|null}. "
-        "body MUST be a plain string, not an array. If you write bullets, join them with newlines. "
-        "diagram: if helpful, a valid Mermaid flowchart TD (3-10 nodes). If not needed, null. "
-        "code: if helpful, an object {language, content} with short snippet; else null. "
-        f"Topic: {topic}. Learner level: {level}. Keep body concise (2-4 bullet sentences)."
+        "Each slide object: {title, body, image|null, diagram|null, code|null, table|null}. "
+        "body MUST be a plain string (no arrays). If you write bullets, join them with newlines. "
+        "diagram: Prefer Mermaid diagrams on 5-7 slides. Use flowchart TD (or graph TD) with short, readable labels, arrows showing direction, and basic shapes like [Node], ((Start/End)), {Decision}. Quote labels that contain parentheses. DO NOT include any ``` fences, frontmatter, or init blocks. "
+        "The 'diagram' field may be either a string or an object with a single key like flowchart/graph/sequenceDiagram/etc whose value is the Mermaid source. "
+        "table: when a comparison fits, include {headers, rows}. Short cell values. "
+        f"Topic: {topic}. Learner level: {level}."
     )
     headers = {
         "Content-Type": "application/json",
@@ -166,7 +211,7 @@ def _generate_with_znapai(topic: str, level: str) -> List[Dict[str, Any]]:
         slides = slides[:15]
     if len(slides) < 14:
         while len(slides) < 14:
-            slides.append({"title": "Recap", "body": f"Key points about {topic}.", "image": None, "diagram": None, "code": None})
+            slides.append({"title": "Recap", "body": f"Key points about {topic}.", "image": None, "diagram": None, "code": None, "table": None})
     return slides
 
 
@@ -182,10 +227,12 @@ def _qa_with_znapai(topic: str, q: str, ctx: Optional[Slide]) -> Dict[str, Any]:
         if ctx.diagram:
             ctx_text += f"Context diagram (mermaid):\n{ctx.diagram[:800]}\n"
     prompt = (
-        "Answer the user's follow-up question for the current deck. Return ONLY JSON object: "
-        "{title, body, diagram|null, code|null}. body MUST be a plain string. Include code or diagram only if it helps. "
+        "Answer the user's follow-up for the deck. Return ONLY JSON object: "
+        "{title, body, diagram|null, code|null, table|null}. body MUST be a plain string. Include diagram/table/code only if it helps. "
         f"Deck topic: {topic}. Question: {q}. {ctx_text}"
-        "Write a new slide that complements the context without repeating it."
+        "Write a new slide that complements the context without repeating it. "
+        "If you include a diagram, prefer Mermaid flowchart TD (or graph TD). Use short, readable labels, and quote labels that contain parentheses. Do not include code fences or init blocks. "
+        "The 'diagram' field can be a string or an object with a key like flowchart/graph/sequenceDiagram/etc containing the Mermaid source."
     )
     headers = {
         "Content-Type": "application/json",

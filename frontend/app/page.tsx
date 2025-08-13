@@ -1,14 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Badge, Container, Group, Select, TextInput, Title, Card, Stack, Text, ActionIcon, Divider, Center, ScrollArea, Box, Code } from '@mantine/core';
+import { Button, Badge, Container, Group, Select, TextInput, Title, Card, Stack, Text, ActionIcon, Divider, Center, ScrollArea, Box, Table } from '@mantine/core';
 import { ArrowLeft, ArrowRight, Link as LinkIcon, Volume2, VolumeX } from 'lucide-react';
 import Mermaid from './components/Mermaid';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 type CodeBlock = { language?: string|null; content: string };
-type Slide = { id: string; title: string; body: string; image?: string | null; diagram?: string | null; code?: CodeBlock | null };
+type TableBlock = { headers: string[]; rows: string[][] };
+type Slide = { id: string; title: string; body: string; image?: string | null; diagram?: string | null; code?: CodeBlock | null; table?: TableBlock | null };
 type Deck = { id: string; topic: string; level: string; slides: Slide[] };
 
 type Usage = { used: number; limit: number };
@@ -16,6 +17,21 @@ type Usage = { used: number; limit: number };
 async function getUsage(): Promise<Usage> {
 	const r = await fetch(`${API}/api/usage`);
 	return r.json();
+}
+
+function renderCell(value: string) {
+	const v = (value || '').trim();
+	if (/^(yes|true|✓)$/i.test(v)) {
+		return <Text span c="green.6">✓</Text>;
+	}
+	if (/^(no|false|✗|x)$/i.test(v)) {
+		return <Text span c="red.6">✗</Text>;
+	}
+	if (/^(high|medium|low)$/i.test(v)) {
+		const color = /high/i.test(v) ? 'red' : /medium/i.test(v) ? 'yellow' : 'green';
+		return <Badge color={color} variant="light" radius="sm">{v}</Badge>;
+	}
+	return <Text span c="dark.9">{v}</Text>;
 }
 
 export default function Page() {
@@ -97,13 +113,33 @@ export default function Page() {
 							<Text size="sm" c="gray.5">{index + 1} / {deck.slides.length}</Text>
 						</Group>
 						{current?.diagram && (
-							<Box mt="xs">
-								<Mermaid code={current.diagram} />
-							</Box>
+							<Box mt="xs"><Mermaid code={current.diagram} /></Box>
 						)}
 						<ScrollArea.Autosize mah={300} mt="xs">
-							<Text c="dark.8" style={{ whiteSpace: 'pre-wrap' }}>{current?.body}</Text>
+							<Text c="dark.9" style={{ whiteSpace: 'pre-wrap' }}>{current?.body}</Text>
 						</ScrollArea.Autosize>
+						{current?.table && (
+							<Box mt="sm" w="100%">
+								<Table striped highlightOnHover captionSide="bottom" style={{ tableLayout: 'fixed' }}>
+									<Table.Thead>
+										<Table.Tr>
+											{current.table.headers.map((h, i) => (
+												<Table.Th key={i} style={{ background: 'rgba(148,163,184,.15)', color: '#0f172a', fontWeight: 600, borderBottom: '1px solid rgba(148,163,184,.35)', padding: '10px 12px' }}>{h}</Table.Th>
+											))}
+										</Table.Tr>
+									</Table.Thead>
+									<Table.Tbody>
+										{current.table.rows.map((r, i) => (
+											<Table.Tr key={i} style={{ background: i % 2 ? 'rgba(148,163,184,.08)' : 'transparent' }}>
+												{r.map((c, j) => (
+													<Table.Td key={j} style={{ padding: '10px 12px', borderTop: '1px solid rgba(148,163,184,.15)', color: '#0f172a' }}>{renderCell(c)}</Table.Td>
+												))}
+											</Table.Tr>
+										))}
+									</Table.Tbody>
+								</Table>
+							</Box>
+						)}
 						{current?.code?.content && (
 							<Box mt="sm" style={{ background: '#0f172a', color: '#e2e8f0', borderRadius: 8, padding: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace' }}>
 								<Text size="xs" c="gray.4">{current?.code?.language || 'code'}</Text>

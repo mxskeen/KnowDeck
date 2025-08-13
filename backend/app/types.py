@@ -8,6 +8,11 @@ class CodeBlock(BaseModel):
     content: str
 
 
+class TableBlock(BaseModel):
+    headers: List[str]
+    rows: List[List[str]]
+
+
 class Slide(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     title: str
@@ -15,6 +20,7 @@ class Slide(BaseModel):
     image: Optional[str] = None
     diagram: Optional[str] = None
     code: Optional[CodeBlock] = None
+    table: Optional[TableBlock] = None
 
 
 class Deck(BaseModel):
